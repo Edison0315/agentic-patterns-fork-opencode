@@ -1,0 +1,149 @@
+/**
+ * PATRÓN: Uso de herramientas - Tool use
+ * ---------------------------
+ * El catálogo de cursos NO está en el entrenamiento
+ * del modelo. Sin herramientas, el modelo inventa precios y cursos con
+ * total confianza o en su defecto, no hace nada.
+ * Con herramientas, consulta el dato real.
+ */
+
+import { generateText, tool, stepCountIs } from 'ai';
+import { z } from 'zod';
+import { createTracer, model } from '../../helpers/index.js';
+
+// ---------------------------------------------------------------------------
+//  LA "BASE DE DATOS" — datos que el modelo no puede conocer
+// ---------------------------------------------------------------------------
+
+type Course = {
+  id: string;
+  title: string;
+  hours: number;
+  priceUSD: number;
+  level: 'basic' | 'intermediate' | 'advanced';
+  students: number;
+};
+
+const COURSE_CATALOG: Course[] = [
+  {
+    id: 'ts-01',
+    title: 'TypeScript desde cero',
+    hours: 22,
+    priceUSD: 19.99,
+    level: 'basic',
+    students: 48_120,
+  },
+  {
+    id: 'nest-02',
+    title: 'NestJS: API REST modular',
+    hours: 31,
+    priceUSD: 24.99,
+    level: 'intermediate',
+    students: 22_450,
+  },
+  {
+    id: 'flu-03',
+    title: 'Flutter: apps multiplataforma',
+    hours: 46,
+    priceUSD: 29.99,
+    level: 'intermediate',
+    students: 61_300,
+  },
+  {
+    id: 'agt-04',
+    title: 'Agentes de IA con TypeScript',
+    hours: 18,
+    priceUSD: 34.99,
+    level: 'advanced',
+    students: 1_890,
+  },
+  {
+    id: 'dkr-05',
+    title: 'Docker para desarrolladores',
+    hours: 14,
+    priceUSD: 17.99,
+    level: 'basic',
+    students: 35_770,
+  },
+];
+
+const QUESTION = 'Cuanto costarian juntos el curso de TS y Docker, con un 20% de descuento? Dame tambien las horas totales';
+
+
+async function withoutTools(){
+
+  const tracer = createTracer('sin-herramientas')
+
+  const { text } = await generateText({
+    model: model,
+    prompt: QUESTION,
+    onStepEnd: tracer.onStepFinish
+  })
+
+  console.log('\n Respuesta', text.green);
+  console.log('\n Verificar los numeros contra el cat de cursos');
+
+  return tracer.summary()
+}
+
+// Implementar el patron Tooluse
+
+// Tool nro findCourses
+
+const findCourses = tool({
+  description: 'Buscar cursos en el catalodo de detalles, por texto, en el titulo, o por nivel, utilizala siempre para responder preguntas',
+  inputSchema: z.object({
+    text: z.string().optional().describe('Texto a buscar en el titulo del curso'),
+    level: z.enum(['basic', 'intermediate', 'advanced']).optional()
+  }),
+  execute: async({ text, level }) => {
+    const filtered = COURSE_CATALOG.filter((course) => {
+      const match = !text || course.title.toLowerCase().includes(text.toLowerCase())
+      const matchLevel = !level || course.level === level;
+
+      return match && matchLevel;
+    })
+
+    return {
+      found: filtered.length,
+      courses: filtered
+    }
+  }
+})
+
+
+async function withTools(){
+
+  const tracer = createTracer('con-herramientas')
+
+  const { text } = await generateText({
+    model: model,
+    prompt: QUESTION,
+    tools: { 
+      findCourses 
+    },
+    instructions: 'Eres un asistente del catalogo de cursos, no inventes precios, ni duraciones, y consulta siempre con las herramientas disponibles',
+    // Circuit breaker
+    stopWhen: stepCountIs(6),
+    onStepEnd: tracer.onStepFinish
+  })
+
+  console.log('\n Respuesta', text.green);
+  console.log('\n Verificar los numeros contra el cat de cursos');
+
+  return tracer.summary()
+}
+
+
+export async function toolUseMain(){
+
+  const resA = await withoutTools();
+  const resB = await withTools();
+
+  console.log('\n ----- Comparativa -----');
+  console.table({
+    'Sin herramientas': resA,
+    'Con herramientas': resB
+  });
+
+}
